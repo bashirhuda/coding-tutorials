@@ -1,0 +1,132 @@
+---
+title: "GEE Demonstration - Bakulski Lab"
+subtitle: "Presented on June 13, 2023"
+author: "Huda Bashir"
+date: "Last compiled on `r format(Sys.Date(), '%B %d, %Y')`"
+format: html
+embed-resources: true
+editor: source
+editor_options: 
+  chunk_output_type: console
+---
+
+Installing the necessary packages -- all data already loaded into environment
+```{r}
+library(dplyr)
+library(geepack)
+library(modelsummary)
+```
+The function we will use from geepack is called 'geeglm'. 
+```{r}
+help(geeglm) ## Let's look at the documentation
+```
+Now let's look at the difference between building a Poisson model and a Poisson model with GEE
+```{r}
+# Model 1 - crude (Isolation Index x ABR) -- need offset
+m1.poisson <- glm(ad_birth~ISO_BX_s+offset(log_ad_pop),
+            data = br,
+            family = poisson(link="log"))
+
+## What is the outcome?
+## What is the exposure?
+## What is the offset?
+
+# Model 2 - model 1 + city level characteristics
+m2.poisson <-glm(ad_birth~ISO_BX_s+pop15_s+SECGDPGPPC_s+offset(log_ad_pop),
+           data = br,
+           family = poisson(link="log"))
+
+# Model 3 - model 2 + homicide rates + social environment indices
+m3.poisson <-glm(ad_birth~ISO_BX_s+pop15_s+SECGDPGPPC_s+homicide_rate_s+CNSSE1_L1AD_s+CNSSE2_L1AD_s+CNSSE3_L1AD_s+offset(log_ad_pop),
+           data = br,
+           family = poisson(link="log"))
+
+## Building matrix
+f <- function(x) format(x, digits = 1, nsmall = 2, scientific = FALSE) # Round to 2 significant figures
+
+## List of models
+models.poisson <- list(m1.poisson, m2.poisson, m3.poisson)
+
+modelsummary(models.poisson,
+             exponentiate = TRUE,
+             vcov = "HC1", ## robust variance
+             statistic = "conf.int", ## confidence interval vs t statistic/standard deviation
+             stars = TRUE, ## significance
+             #coef_map = SEE BELOW
+             fmt = f ## 2 standard deviations
+)
+```
+EXTRA INFORMATION -- adding labels to coefficients
+```{r}
+cm_poisson <- c("ISO_BX_s" = "Standardized Isolation Index (RRS)",
+         "pop15_s" = "Population Size",
+         "SECGDPGPPC_s" = "GDP per capita PPP 2015 (constant 2011 international $)",
+         "homicide_rate_s" = "Homicide Rate per 100,000",
+         "CNSSE1_L1AD_s" = "Living conditions score",
+         "CNSSE2_L1AD_s" = "Service provision score",
+         "CNSSE3_L1AD_s" = "Education attainment score") ## doesn't include intercept
+
+modelsummary(models.poisson,
+             exponentiate = TRUE,
+             statistic = "conf.int", 
+             stars = TRUE,
+             coef_map = cm_poisson, ## add labels to your variables -- doesn't automatically add labels, I excluded the intercept
+             fmt = f
+)
+
+```
+How do set up GEE
+```{r}
+
+## Create a factor variable for the cluster variable - your dataset may have this already
+br$REGION_BR_f <- factor(br$REGION_BR,
+                        levels = c(1,2,3,4,5),
+                        labels = c("North", "Northeast", "Southeast", "South", "Central-West"))
+table(br$REGION_BR) ## double checking
+table(br$REGION_BR_f)
+
+## Sort dataframe by cluster variable
+br_gee <- br %>%
+  arrange(REGION_BR_f)
+View(br_gee)
+```
+Building your models
+
+```{r}
+# Model 1 - crude (Isolation Index x ABR)
+m1.gee <- geeglm(ad_birth~ISO_BX_s+offset(log_ad_pop),
+                   id = REGION_BR_f, ## this is the either the cluster variable, or the subject variable
+                   data = br_gee,
+                   corstr = "exchangeable", ## all pairs of responses within a subject are equally correlated, independence - not allowing responses within subjects to be correlated
+                   std.err = "san.se", ## sandwich estimator - robust variance, also jackknife variance
+                   family = poisson(link="log")) 
+
+# Model 2 - model 1 + city level characteristics
+m2.gee <-geeglm(ad_birth~ISO_BX_s+pop15_s+SECGDPGPPC_s+offset(log_ad_pop),
+                  id = REGION_BR_f,
+                  data = br_gee,
+                  corstr = "exchangeable", 
+                  std.err = "san.se", 
+                  family = poisson(link="log"))
+summary(m2.gee)
+# Model 3 - model 2 + social environment indices
+m3.gee <-geeglm(ad_birth~ISO_BX_s+pop15_s+SECGDPGPPC_s+homicide_rate_s+CNSSE1_L1AD_s+CNSSE2_L1AD_s+CNSSE3_L1AD_s+offset(log_ad_pop),
+                  id = REGION_BR_f,
+                  data = br_gee,
+                  corstr = "exchangeable",
+                  std.err = "san.se",
+                  family = poisson(link="log"))
+
+## Building matrix
+
+# list of models
+models.gee <- list(m1.gee, m2.gee, m3.gee)
+
+modelsummary(models.gee,
+             exponentiate = TRUE, ## NOTE, NOT USING VCOV
+             statistic = "conf.int",
+             stars = TRUE,
+             coef_map = cm_poisson,
+             fmt = f
+)
+```
