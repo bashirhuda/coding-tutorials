@@ -1,0 +1,472 @@
+---
+title: "Building Flowchart Diagrams"
+subtitle: "Using the packages ggflowchart, consort, ggconsort, and visR"
+author: "Huda Bashir"
+date: "Last compiled on `r format(Sys.Date(), '%B %d, %Y')`"
+format: html
+embed-resources: true
+editor: source
+editor_options: 
+  chunk_output_type: console
+---
+This Quarto Markdown file explains how to use the packages ggflowchart, consort, ggconsort, and visR to build flow diagrams (also known as consort diagrams) to build inclusion/exclusion criteria flow diagrams.
+```{r}
+#| eval: false
+
+##Loading packages
+library(tidyverse)
+library(dplyr)
+library(nhanesA)
+library(ggflowchart)
+library(consort)
+library(ggconsort)
+library(visR)
+```
+## Building dataset
+```{r}
+## Importing nhanes data using nhanesA
+demog <- nhanes("DEMO_H")
+demog <- demog %>%
+  select(SEQN,
+         RIAGENDR,
+         RIDAGEYR,
+         RIDRETH1,
+         INDFMPIR,
+         DMDEDUC2)
+
+# Load cognitive data
+cog <- nhanes("CFQ_H")
+cog <- cog %>%
+  select(SEQN,
+         CFDDS)
+
+# Load lead and cadmium data
+metals <- nhanes("PBCD_H")
+metals <- metals %>%
+  select(SEQN,
+         LBXBPB,
+         LBXBCD)
+
+## merging dataset
+
+nhanes <- left_join(demog, cog, by = "SEQN") %>%
+  left_join(., metals, by = "SEQN")
+```
+
+## Building a flowchart using the ggflowchart package
+https://cran.r-project.org/web/packages/ggflowchart/index.html
+https://github.com/cran/ggflowchart
+
+I found this example by Nicola Rennie to be extremely helpful. https://nrennie.rbind.io/blog/introducing-ggflowchart/
+
+CRITERIA:
+(1) Eligible participants (Age ≥ 60)
+(2) Exposure (LBXBCD) - drop missing
+(3) Outcome (CFDDS) - drop missing
+(4) Key covariates: sex, race, education - drop missing
+```{r}
+## Example from developer:
+data <- tibble::tibble(from = c("A", # A to B (first in to)
+                                "A", # A to C (second in to)
+                                "A", # A to D (third in to)
+                                "B", # B to E (fourth in to)
+                                "C", # C to F (fifth in to)
+                                "F"), # F to G (sixth in to)
+                       to = c("B",
+                              "C",
+                              "D",
+                              "E",
+                              "F",
+                              "G"))
+data
+ggflowchart(data)
+
+## flowchart using nhanes data set
+
+## building the tibble -- drawback is this is all hand input, room for user error. May be better if function is developed.
+
+## NOTE: BE SURE THAT YOU WRITE THE NAMES FOR EACH NODE EXACTLY THE SAME OR IT WILL CREATE A NEW NODE! THIS INCLUDES EXTRA SPACES.
+
+data_flow <- tibble::tibble(from = c("NHANES\nN = 10,175",## \n means create a new line (enter)
+                                     "NHANES\nN = 10,175",
+                                     "Age ≥ 60\nN = 1,841",
+                                     "Age ≥ 60\nN = 1,841",
+                                     "Blood cadmium (ug/L)\nN = 849",
+                                     "Blood cadmium (ug/L)\nN = 849",
+                                     "Digit Symbol: Score\nN = 773",
+                                     "Digit Symbol: Score\nN = 773",
+                                     "Gender\nN = 773",
+                                     "Gender\nN = 773",
+                                     "Race/Ethnicity\nN = 773",
+                                     "Race/Ethnicity\nN = 773"),
+                       to = c("Age ≥ 60\nN = 1,841",
+                              "Age < 60\nN = 8,334",
+                              "Blood cadmium (ug/L)\nN = 849",
+                              "Missing blood cadmium (ug/L)\nN = 992",
+                              "Digit Symbol: Score\nN = 773",
+                              "Missing Digit Symbol: Score\nN = 76",
+                              "Gender\nN = 773",
+                              "Missing Gender\nN = 0",
+                              "Race/Ethnicity\nN = 773",
+                              "Missing Race/Ethnicity\nN = 0",
+                              "Education\nN = 773",
+                              "Missing Education\nN = 0")
+                       )
+
+data_flow ## looking at tibble
+
+##building flowchart
+flowchart <- ggflowchart(data_flow,
+                         x_nudge = 0.45, ## width of box
+                         y_nudge = 0.35) ## height of box
+flowchart
+```
+## Using the consort package
+https://github.com/adayim/consort
+```{r}
+data_flow2 <- nhanes %>% ## original dataset from which everything is excluded
+  mutate(excl = case_when( ## variable - conditions for which to exclude - ORDER MATTERS
+    RIDAGEYR < 60 ~ "Age < 60",
+    is.na(LBXBCD) ~ "Missing blood cadmium (ug/L)",
+    is.na(CFDDS) ~ "Missing Digit Symbol: Score",
+    is.na(RIAGENDR) ~ "Gender Missing",
+    is.na(RIDRETH1) ~ "Race Missing",
+    is.na(DMDEDUC2) ~ "Missing Education"))
+
+## values to be used in consort_plot function below - orders refers to the order to build the boxes
+orders = c(SEQN = "NHANES",  ## ID number used to calculate total number of observations, renaming node as "NHANES".
+           excl = "Excluded", # variable created above
+           SEQN = "Included") # using ID to calculate number remaining at end
+
+## values to be used in consort_plot function below - side_box refers to which boxes should be off to the side (vs vertical), in this case just the excluded variable
+side_box = c("excl")
+
+# building the consort diagram
+consort1 <- consort_plot(data_flow2, ## data created above
+                         orders = orders, ## order of boxes
+                         side_box = side_box) ## which off to the side
+
+consort1 ## Downside - it doesn't show variables for which 0 is missing (i.e. it doesn't show 0 missing for gender)
+```
+```{r}
+## Building consort diagram with each individual variable in the flowchart
+
+data_flow3 <- nhanes %>% ## original dataset from which everything is excluded
+  mutate(age_inc = case_when( 
+    RIDAGEYR >= 60 ~ "Age"
+  )) %>%
+  mutate(age_ex = case_when( ## excluded Age < 60
+    RIDAGEYR < 60 ~ "Age < 60"
+    )) %>%
+  mutate(cad_inc = case_when( ## creating individual included/excluded variables
+    !is.na(LBXBCD) ~ "Blood cadmium (ug/L)" ## note ! for NOT NA (i.e. has a value)
+  )) %>%
+  mutate(cad_ex = case_when(
+    is.na(LBXBCD) ~ "Missing blood cadmium (ug/L)"
+  )) %>%
+  mutate(ds_inc = case_when(
+    !is.na(CFDDS) ~ "Digit Symbol: Score"
+  )) %>%
+  mutate(ds_ex = case_when(
+    is.na(CFDDS) ~ "Missing Digit Symbol: Score"
+  )) %>%
+  mutate(gender_inc = case_when(
+    !is.na(RIAGENDR) ~ "Gender", 
+  )) %>%
+  mutate(gender_ex = case_when( ## excluded - gender missing, ... etc.
+    is.na(RIAGENDR) ~ "Missing Gender"
+  )) %>%
+  mutate(race_inc = case_when(
+    !is.na(RIDRETH1) ~ "Race/Ethnicity"
+  )) %>%
+  mutate(race_ex = case_when(
+    is.na(RIDRETH1)  ~ "Missing Race/Ethnicity"
+  )) %>%
+  mutate(edu_inc = case_when(
+    !is.na(DMDEDUC2) ~ "Education"
+  )) %>%
+  mutate(edu_ex = case_when(
+    is.na(DMDEDUC2) ~ "Missing Education"
+  ))
+
+## values to be used in consort_plot function below - order refers to the order to build the boxes
+orders2 = c(SEQN = "NHANES",
+            age_ex = "",
+            age_inc = "Age ≥ 60",
+            cad_ex = "",
+            cad_inc = "Blood cadmium (ug/L)",
+            ds_ex = "",
+            ds_inc = "Digit Symbol: Score",
+            gender_ex = "",
+            gender_inc = "Gender",
+            race_ex = "",
+            race_inc = "Race/Ethnicity",
+            edu_ex = "",
+            edu_inc = "Education")
+
+## values to be used in consort_plot function below - side_box refers to which boxes should be off to the side (vs vertical)
+side_box2 = c("age_ex", "cad_ex", "ds_ex", "gender_ex", "race_ex", "edu_ex")  
+
+consort2 <- consort_plot(data_flow3,
+                         orders = orders2,
+                         side_box = side_box2)
+
+consort2 ## Downside - it doesn't show variables for which 0 is missing (i.e. it doesn't show 0 missing for gender)
+```
+## Using the ggconsort package
+It is a little tricky to install this package, instructions under "Installation". https://github.com/tgerke/ggconsort
+install.packages("devtools")
+devtools::install_github("tgerke/ggconsort")
+
+This video was also super helpful to follow along to - https://www.youtube.com/watch?v=a8A638n6Qew&t=572s
+```{r}
+
+data_flow4 <- nhanes %>% ## original dataset
+  cohort_start("NHANES") %>%  ## name for first node
+  cohort_define( ## criteria for included (until excluded)
+    age = .full %>% filter(RIDAGEYR >= 60), # include: age ≥ 60
+    cad = age %>% drop_na(LBXBCD), # include: not missing blood cadmimum
+    ds = cad %>% drop_na(CFDDS),
+    gender = ds %>% drop_na(RIAGENDR),
+    race = gender %>% drop_na(RIDRETH1),
+    edu = race %>% drop_na(DMDEDUC2),
+    included = edu, ## same # observations as education for final included 
+    excluded = anti_join(.full, edu, by = "SEQN"), ## total excluded (difference between full and edu)
+    excluded_age = anti_join(.full, age, by = "SEQN"), ## excluded difference between full and age
+    excluded_cad = anti_join(age, cad, by = "SEQN"), ## excluded difference between age and cadmium...etc.
+    excluded_ds = anti_join(cad, ds, by = "SEQN"),
+    excluded_gender = anti_join(ds, gender, by = "SEQN"),
+    excluded_race = anti_join(gender, race, by = "SEQN"),
+    excluded_edu = anti_join(race, edu, by = "SEQN"),
+  ) %>%
+  cohort_label( ## adding labels
+    age = "Age ≥ 60",
+    cad = "Blood cadmium (ug/L)",
+    ds = "Digital Symbol: Score",
+    gender = "Gender",
+    race = "Race/Ethnicity",
+    edu = "Education",
+    included = "Included",
+    excluded = "Excluded",
+    excluded_age = "Age < 60",
+    excluded_cad = "Missing blood cadmium (ug/L)",
+    excluded_ds = "Missing Digital Symbol: Score",
+    excluded_gender = "Missing Gender",
+    excluded_race = "Missing Race/Ethnicity",
+    excluded_edu = "Missing Education"
+  )
+
+## NOTE: Not all of these are necessary!! For example, if you want to create a table like consort1, you don't need as many conditions above - example like consort3 below
+
+summary(data_flow4) ## double checking tibble
+
+consort3 <- data_flow4 %>%
+  consort_box_add(
+    "full", 0, 50, cohort_count_adorn(., .full) ## "full" is the first node for NHANES (this name will be referred back to when building arrows), 0 is x position, 50 is y position, counting between # observations in data_flow5 (represented as .) and the .full dataset - should be 10175 since we did not exclude any observations yet
+  ) %>%
+  consort_box_add( ## new box is for the exclusion criteria
+    "exclusions", 20, 40, glue::glue( ## "exclusions" is a name to refer back to when building arrows, bullet points for each category of exclusion
+      '{cohort_count_adorn(data_flow4, excluded)}<br>
+      • {cohort_count_adorn(data_flow4, excluded_age)}<br> 
+      • {cohort_count_adorn(data_flow4, excluded_cad)}<br>
+      • {cohort_count_adorn(data_flow4, excluded_ds)}<br>
+      • {cohort_count_adorn(data_flow4, excluded_gender)}<br>
+      • {cohort_count_adorn(data_flow4, excluded_race)}<br>
+      • {cohort_count_adorn(data_flow4, excluded_edu)}<br>
+      ')
+  ) %>%
+  consort_box_add( ## one final box for included observations
+    "inclusions", 0, 30, cohort_count_adorn(., included) ## "inclusions" is a name to refer back to when building arrows, excluding observations from data_flow5 (represented as .) to included
+  ) %>%
+  consort_arrow_add( ## arrow from bottom of "full" to top of "included"
+    start = "full", start_side = "bottom",
+    end = "inclusions", end_side = "top"
+  ) %>%
+  consort_arrow_add( ## adding an arrow that doesn't start at box
+    end = "exclusions", end_side = "left", start_x = 0, start_y = 40
+  ) ## ends at "exclusions", staring at x -- vertical line above, and y is 40 (like placement for "exclusions)
+
+
+consort3 %>% ## building consort table using ggplot2
+  ggplot() + ## ggplot
+  geom_consort() + ## consort
+  theme_consort(margin_h = 15, margin_v = 1) ## width and height
+```
+```{r}
+#| fig-height: 9
+#| fig-width: 7
+## if you want to show all of the inclusion variables
+consort4 <- data_flow4 %>% 
+  consort_box_add(
+    "full", 0, 50, cohort_count_adorn(., .full)
+  ) %>%
+  consort_box_add(
+    "exclusions", 20, 40, glue::glue(
+      '{cohort_count_adorn(data_flow4, excluded)}<br>
+      • {cohort_count_adorn(data_flow4, excluded_age)}<br> 
+      • {cohort_count_adorn(data_flow4, excluded_cad)}<br>
+      • {cohort_count_adorn(data_flow4, excluded_ds)}<br>
+      • {cohort_count_adorn(data_flow4, excluded_gender)}<br>
+      • {cohort_count_adorn(data_flow4, excluded_race)}<br>
+      • {cohort_count_adorn(data_flow4, excluded_edu)}<br>
+      ')
+  ) %>%
+  consort_box_add(
+    "inclusions", 0, 30, glue::glue(
+      '{cohort_count_adorn(data_flow4, included)}<br>
+      • {cohort_count_adorn(data_flow4, age)}<br> 
+      • {cohort_count_adorn(data_flow4, cad)}<br>
+      • {cohort_count_adorn(data_flow4, ds)}<br>
+      • {cohort_count_adorn(data_flow4, gender)}<br>
+      • {cohort_count_adorn(data_flow4, race)}<br>
+      • {cohort_count_adorn(data_flow4, edu)}<br>
+      ')
+  ) %>%
+  consort_arrow_add(
+    start = "full", start_side = "bottom",
+    end = "inclusions", end_side = "top"
+  ) %>%
+  consort_arrow_add(
+    end = "exclusions", end_side = "left", start_x = 0, start_y = 40
+  )
+
+consort4 %>% ## building consort table using ggplot2
+  ggplot() + ## ggplot
+  geom_consort() + ## consort
+  theme_consort(margin_h = 15, margin_v = 6) ## width and height
+```
+```{r}
+## Trying to build consort diagram  with each individual variable
+consort5 <- data_flow4 %>%
+  consort_box_add( ## first box
+    "full", 0, 50, cohort_count_adorn(., .full)
+  ) %>%
+  consort_box_add( ## adding age
+    "age", 0, 45, cohort_count_adorn(., age)
+  ) %>%
+  consort_box_add( ## adding age_missing
+    "age_missing", 20, 45, cohort_count_adorn(., excluded_age)
+  ) %>%
+  consort_arrow_add( ## arrow from bottom of "full" to top of "age"
+    start = "full", start_side = "bottom",
+    end = "age", end_side = "top"
+  ) %>%
+  consort_arrow_add( ## arrow from bottom of "full" to top of "age missing"
+    start = "full", start_side = "bottom",
+    end = "age_missing", end_side = "top"
+  ) %>%
+  consort_box_add( ## repeated for each variable...
+    "cad", 0, 40, cohort_count_adorn(., cad)
+  ) %>%
+  consort_box_add(
+    "cad_missing", 20, 40, cohort_count_adorn(., excluded_cad)
+  ) %>%
+  consort_arrow_add( 
+    start = "age", start_side = "bottom",
+    end = "cad", end_side = "top"
+  ) %>%
+  consort_arrow_add(
+    start = "age", start_side = "bottom",
+    end = "cad_missing", end_side = "top"
+  ) %>%
+  consort_box_add(
+    "ds", 0, 35, cohort_count_adorn(., ds)
+  ) %>%
+  consort_box_add(
+    "ds_missing", 20, 35, cohort_count_adorn(., excluded_ds)
+  ) %>%
+  consort_arrow_add(
+    start = "cad", start_side = "bottom",
+    end = "ds", end_side = "top"
+  ) %>%
+  consort_arrow_add(
+    start = "cad", start_side = "bottom",
+    end = "ds_missing", end_side = "top"
+  ) %>%
+  consort_box_add(
+    "gender", 0, 30, cohort_count_adorn(., gender)
+  ) %>%
+  consort_box_add(
+    "gender_missing", 20, 30, cohort_count_adorn(., excluded_gender)
+  ) %>%
+  consort_arrow_add(
+    start = "ds", start_side = "bottom",
+    end = "gender", end_side = "top"
+  ) %>%
+  consort_arrow_add(
+    start = "ds", start_side = "bottom",
+    end = "gender_missing", end_side = "top"
+  ) %>%
+  consort_box_add(
+    "race", 0, 25, cohort_count_adorn(., race)
+  ) %>%
+  consort_box_add(
+    "race_missing", 20, 25, cohort_count_adorn(., excluded_race)
+  ) %>%
+  consort_arrow_add(
+    start = "gender", start_side = "bottom",
+    end = "race", end_side = "top"
+  ) %>%
+  consort_arrow_add(
+    start = "gender", start_side = "bottom",
+    end = "race_missing", end_side = "top"
+  ) %>%
+  consort_box_add(
+    "edu", 0, 20, cohort_count_adorn(., edu)
+  ) %>%
+  consort_box_add(
+    "edu_missing", 20, 20, cohort_count_adorn(., excluded_edu)
+  ) %>%
+  consort_arrow_add(
+    start = "race", start_side = "bottom",
+    end = "edu", end_side = "top"
+  ) %>%
+  consort_arrow_add(
+    start = "race", start_side = "bottom",
+    end = "edu_missing", end_side = "top"
+  )
+
+consort5 %>%
+  ggplot() +
+  geom_consort() +
+  theme_consort(margin_h = 8, margin_v = 1)
+```
+## Using the visR package
+https://cran.r-project.org/web/packages/visR/visR.pdf, https://cran.r-project.org/web/packages/visR/vignettes/Consort_flow_diagram.html
+```{r}
+
+data_flow5 <- get_attrition(nhanes, ## data set for inclusion/exclusion
+                            criteria_descriptions = c("Age ≥ 60", ## name of descriptions for criteria
+                                                      "Blood cadmium (ug/L)",
+                                                      "Digit Symbol: Score",
+                                                      "Sex",
+                                                      "Race",
+                                                      "Education"),
+                            criteria_conditions = c("RIDAGEYR >= 60", ## conditions for filtering
+                                                    "LBXBCD != 'NA'", ##  equivalent of drop_na
+                                                    "CFDDS != 'NA'",
+                                                    "RIAGENDR != 'NA'",
+                                                    "RIDRETH1 != 'NA'",
+                                                    "DMDEDUC2 != 'NA'"),
+                           
+                            subject_column_name = "SEQN") ## ID variable
+
+data_flow5 ## does tibble loook correct?
+
+## building the flowchart
+consort6 <- data_flow5 %>% visr("Criteria", "Remaining N")
+consort6
+
+## OPTIONAL!!! -- editing right column so it doesn't just say 'excluded' - you can also update box color, border, and font size!
+data_flow5$Complement <- c("NA", ## no label to the right of "Total cohort size"
+                           "Age < 60",
+                           "Missing blood cadmium (ug/L)",
+                           "Missing Digit Symbol: Score",
+                           "Missing Sex",
+                           "Missing Race/Ethnicity",
+                           "Missing Education")
+
+consort7 <- data_flow5 %>% ## labeling excluded with complement labels
+  visr("Criteria", "Remaining N", "Complement", font_size = 20)
+consort7
+```
